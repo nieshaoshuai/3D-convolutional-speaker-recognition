@@ -11,3 +11,6 @@ tqdm>=4.66.0
 
 # Evaluation and visualization
 matplotlib>=3.7.0
+
+# Web visualization (TensorBoard)
+tensorboard>=2.14.0

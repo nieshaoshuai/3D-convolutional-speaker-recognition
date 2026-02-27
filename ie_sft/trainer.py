@@ -6,10 +6,11 @@ from typing import Dict, List, Tuple
 
 import torch
 from torch.optim import AdamW
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from transformers import get_linear_schedule_with_warmup
 
-from eval import evaluate_model, plot_precision_curve, save_metrics_log
+from eval import evaluate_model, plot_loss_curve, plot_precision_curve, save_metrics_log
 
 
 @dataclass
@@ -80,42 +81,60 @@ def train(model_wrapper, tokenizer, train_loader, val_loader, config: TrainConfi
     checkpoint_manager = CheckpointManager(config.output_dir, config.max_checkpoints)
     metrics_history: List[Dict[str, float]] = []
 
+    tensorboard_dir = Path(config.output_dir) / "tensorboard"
+    writer = SummaryWriter(log_dir=str(tensorboard_dir))
+
     global_step = 0
     model.train()
 
-    for epoch in range(config.epochs):
-        progress = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{config.epochs}")
-        for batch in progress:
-            batch.pop("raw_inputs")
-            batch.pop("raw_targets")
-            batch = {k: v.to(device) for k, v in batch.items()}
+    try:
+        for epoch in range(config.epochs):
+            progress = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{config.epochs}")
+            for batch in progress:
+                batch.pop("raw_inputs")
+                batch.pop("raw_targets")
+                batch = {k: v.to(device) for k, v in batch.items()}
 
-            outputs = model(**batch)
-            loss = outputs.loss
-            loss.backward()
+                outputs = model(**batch)
+                loss = outputs.loss
+                loss.backward()
 
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad(set_to_none=True)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
 
-            global_step += 1
-            progress.set_postfix({"loss": f"{loss.item():.4f}", "step": global_step})
+                global_step += 1
+                train_loss = loss.item()
+                writer.add_scalar("loss/train_step", train_loss, global_step)
+                progress.set_postfix({"loss": f"{train_loss:.4f}", "step": global_step})
 
-            if global_step % config.eval_every_steps == 0:
-                metrics = evaluate_model(model_wrapper, tokenizer, val_loader, device)
-                metric_row = {"step": global_step, **metrics}
-                metrics_history.append(metric_row)
+                if global_step % config.eval_every_steps == 0:
+                    metrics = evaluate_model(model_wrapper, tokenizer, val_loader, device)
+                    metric_row = {
+                        "step": global_step,
+                        "train_loss": train_loss,
+                        "eval_loss": metrics["eval_loss"],
+                        "precision": metrics["precision"],
+                    }
+                    metrics_history.append(metric_row)
 
-                checkpoint_manager.maybe_save(
-                    model=model,
-                    tokenizer=tokenizer,
-                    metric_value=metrics["precision"],
-                    step=global_step,
-                    metrics_history=metrics_history,
-                )
+                    writer.add_scalar("loss/train_eval_step", train_loss, global_step)
+                    writer.add_scalar("loss/eval", metrics["eval_loss"], global_step)
+                    writer.add_scalar("metric/precision", metrics["precision"], global_step)
 
-                save_metrics_log(metrics_history, str(Path(config.output_dir) / "metrics.json"))
-                plot_precision_curve(metrics_history, str(Path(config.output_dir) / "precision_curve.png"))
-                model.train()
+                    checkpoint_manager.maybe_save(
+                        model=model,
+                        tokenizer=tokenizer,
+                        metric_value=metrics["precision"],
+                        step=global_step,
+                        metrics_history=metrics_history,
+                    )
+
+                    save_metrics_log(metrics_history, str(Path(config.output_dir) / "metrics.json"))
+                    plot_precision_curve(metrics_history, str(Path(config.output_dir) / "precision_curve.png"))
+                    plot_loss_curve(metrics_history, str(Path(config.output_dir) / "loss_curve.png"))
+                    model.train()
+    finally:
+        writer.close()
 
     return metrics_history
