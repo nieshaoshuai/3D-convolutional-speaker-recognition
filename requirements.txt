@@ -1,0 +1,13 @@
+# Core deep learning runtime
+# If you need a specific CUDA build, install torch first from https://pytorch.org/get-started/locally/
+torch>=2.1.0
+
+# HuggingFace model/tokenizer stack
+transformers>=4.40.0
+sentencepiece>=0.1.99
+
+# Training utilities
+tqdm>=4.66.0
+
+# Evaluation and visualization
+matplotlib>=3.7.0
